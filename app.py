@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import date
 import urllib.parse
 import requests
+from twilio.rest import Client
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Enjambre VRA | Plataforma Integral", page_icon="🚁", layout="wide")
@@ -16,8 +17,6 @@ st.markdown("""
     .sensor-verde { background-color: #d4edda; color: #155724; padding: 15px; border-radius: 8px; border-left: 5px solid #28a745; text-align: center; margin-bottom: 10px;}
     .sensor-amarillo { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 8px; border-left: 5px solid #ffc107; text-align: center; margin-bottom: 10px;}
     .sensor-rojo { background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; border-left: 5px solid #dc3545; text-align: center; font-weight: bold; margin-bottom: 10px;}
-    .whatsapp-btn { background-color: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; text-align: center; width: 100%;}
-    .whatsapp-btn:hover { background-color: #128C7E; color: white;}
     .horario-auto { background-color: #e2e3e5; color: #383d41; padding: 10px; border-radius: 5px; border-left: 5px solid #6c757d; margin-bottom: 5px;}
     </style>
 """, unsafe_allow_html=True)
@@ -36,16 +35,33 @@ if 'total_litros_hoy' not in st.session_state: st.session_state.total_litros_hoy
 
 DB_CULTIVOS = ["Cerezas", "Uva Vinífera", "Paltos", "Nogales", "Maíz", "Trigo", "Arándanos"]
 
-# --- FUNCIONES INTELIGENTES ---
+# --- 🚀 FUNCIÓN DE TWILIO ---
+def enviar_whatsapp_twilio(mensaje, telefono_destino):
+    try:
+        required_secrets = ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE"]
+        faltantes = [secret for secret in required_secrets if secret not in st.secrets]
+
+        if faltantes:
+            return False, f"Faltan secrets en Streamlit Cloud: {', '.join(faltantes)}"
+
+        account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
+        auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
+        twilio_phone = st.secrets["TWILIO_PHONE"]
+
+        client = Client(account_sid, auth_token)
+        message = client.messages.create(body=mensaje, from_=twilio_phone, to=f"whatsapp:+{telefono_destino}")
+        return True, message.sid
+    except Exception as e:
+        return False, str(e)
+
+# --- OTRAS FUNCIONES ---
 def buscar_ubicacion(direccion):
     try:
         url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(direccion)}&format=json&limit=1"
         headers = {'User-Agent': 'EnjambreVRADemo/1.0'}
         response = requests.get(url, headers=headers).json()
-        if response:
-            return [float(response[0]['lat']), float(response[0]['lon'])]
-    except:
-        pass
+        if response: return [float(response[0]['lat']), float(response[0]['lon'])]
+    except: pass
     return None
 
 def obtener_clima_real(lat, lon):
@@ -56,28 +72,20 @@ def obtener_clima_real(lat, lon):
         viento = respuesta["current_weather"]["windspeed"]
         humedad = respuesta["hourly"]["relative_humidity_2m"][0]
         return {"temp": temp, "hum": humedad, "viento": viento}
-    except:
-        return {"temp": 13.8, "hum": 73, "viento": 1.7}
+    except: return {"temp": 13.8, "hum": 73, "viento": 1.7}
 
-# 🚀 MOTOR DE VUELO QUIRÚRGICO (RAY-CASTING)
 def calcular_ruta_patron(coords_zona, patron, lat_base, lon_base):
     if not coords_zona: return []
-    
-    # Calculamos el centro exacto de la zona seleccionada
     c_lat = sum(p[0] for p in coords_zona) / len(coords_zona)
     c_lon = sum(p[1] for p in coords_zona) / len(coords_zona)
-    
-    ruta = [[lat_base, lon_base], [c_lat, c_lon]] # Despega de la base y va al centro de la zona
-    
+    ruta = [[lat_base, lon_base], [c_lat, c_lon]] 
     if patron == "Perimetral (Bordes)":
         ruta.extend(coords_zona)
         ruta.append(coords_zona[0]) 
-        
     elif patron == "Zig-Zag (Cobertura Total)":
         lats = [p[0] for p in coords_zona]
         max_lat, min_lat = max(lats), min(lats)
         paso_lat = (max_lat - min_lat) / 6 
-        
         poly = coords_zona + [coords_zona[0]]
         for i in range(1, 6):
             lat_actual = max_lat - (i * paso_lat)
@@ -88,20 +96,16 @@ def calcular_ruta_patron(coords_zona, patron, lat_base, lon_base):
                     if p2[0] != p1[0]: 
                         lon_int = p1[1] + (lat_actual - p1[0]) * (p2[1] - p1[1]) / (p2[0] - p1[0])
                         intersecciones.append(lon_int)
-            
             intersecciones.sort()
-            # Esto asegura que el dron NO se salga de la zona
             if len(intersecciones) >= 2:
                 lon_start, lon_end = intersecciones[0], intersecciones[-1]
                 if i % 2 == 0: ruta.extend([[lat_actual, lon_start], [lat_actual, lon_end]])
                 else: ruta.extend([[lat_actual, lon_end], [lat_actual, lon_start]])
-                    
     elif patron == "Espiral (Foco Central)":
         for i in range(1, 6):
             r = (0.0008 / 5) * i
             ruta.extend([[c_lat + r, c_lon], [c_lat, c_lon + r], [c_lat - r, c_lon], [c_lat, c_lon - r]])
-            
-    ruta.append([lat_base, lon_base]) # Vuelve a la base
+    ruta.append([lat_base, lon_base])
     return ruta
 
 # ==========================================
@@ -114,36 +118,33 @@ if st.session_state.paso == 'login':
         st.subheader("Acceso Administrativo")
         with st.form("registro_form"):
             nombre = st.text_input("Nombre Completo")
-            email = st.text_input("Correo Electrónico (Reportes)")
             telefono = st.text_input("Teléfono WhatsApp (Ej: 56912345678)")
-            password = st.text_input("Contraseña", type="password")
             submit = st.form_submit_button("Ingresar al Sistema", type="primary", use_container_width=True)
-            if submit and nombre and email and telefono:
+            
+            if submit and nombre and telefono:
                 tel_limpio = ''.join(filter(str.isdigit, telefono))
-                st.session_state.usuario = {'nombre': nombre, 'email': email, 'telefono': tel_limpio}
+                st.session_state.usuario = {'nombre': nombre, 'telefono': tel_limpio}
                 st.session_state.paso = 'onboarding_mapa'
                 st.rerun()
 
 # ==========================================
-# FASE 2: MAPA INTELIGENTE
+# FASE 2: MAPA INTELIGENTE (POR COORDENADAS)
 # ==========================================
 elif st.session_state.paso == 'onboarding_mapa':
-    st.header(f"Bienvenido {st.session_state.usuario['nombre']} - Delimitación Satelital")
+    st.header(f"Bienvenido {st.session_state.usuario.get('nombre', '')} - Delimitación Satelital")
     
-    st.write("🔍 **Paso 1:** Busque la región o sector de su terreno para acercar el satélite.")
-    col_search, col_btn = st.columns([3, 1])
-    with col_search:
-        direccion_busqueda = st.text_input("Ingrese ubicación:", label_visibility="collapsed")
+    st.write("🔍 **Paso 1:** Ingrese las coordenadas (Latitud y Longitud) de su terreno para acercar el satélite.")
+    col_lat, col_lon, col_btn = st.columns([2, 2, 1])
+    
+    with col_lat:
+        lat_busqueda = st.number_input("Latitud:", value=-33.45600, format="%.5f")
+    with col_lon:
+        lon_busqueda = st.number_input("Longitud:", value=-70.65000, format="%.5f")
     with col_btn:
-        if st.button("Buscar en Mapa", type="primary", use_container_width=True):
-            if direccion_busqueda:
-                with st.spinner("Localizando..."):
-                    nuevas_coords = buscar_ubicacion(direccion_busqueda)
-                    if nuevas_coords:
-                        st.session_state.mapa_buscador_inicial = nuevas_coords
-                        st.rerun()
-                    else:
-                        st.error("Ubicación no encontrada.")
+        st.write("") # Espaciador para alinear el botón
+        if st.button("Ir a Coordenadas", type="primary", use_container_width=True):
+            st.session_state.mapa_buscador_inicial = [lat_busqueda, lon_busqueda]
+            st.rerun()
 
     st.write("📍 **Paso 2:** Utilice la herramienta de polígono ⬠ para dibujar las fronteras de su parcela.")
     
@@ -162,7 +163,6 @@ elif st.session_state.paso == 'onboarding_mapa':
         if mapa_data and mapa_data.get("all_drawings"):
             dibujo = mapa_data["all_drawings"][0]
             st.session_state.poligono_coords = dibujo["geometry"]["coordinates"][0]
-            
             coords_formateadas = [[p[1], p[0]] for p in st.session_state.poligono_coords]
             pts_unicos = coords_formateadas[:-1] if coords_formateadas[0] == coords_formateadas[-1] else coords_formateadas
             st.session_state.centro_mapa = [sum(p[0] for p in pts_unicos) / len(pts_unicos), sum(p[1] for p in pts_unicos) / len(pts_unicos)]
@@ -202,12 +202,11 @@ elif st.session_state.paso == 'onboarding_cultivos':
                 st.rerun()
 
 # ==========================================
-# FASE 4: DASHBOARD PRINCIPAL Y CÁLCULO DE ZONAS
+# FASE 4: DASHBOARD PRINCIPAL
 # ==========================================
 elif st.session_state.paso == 'dashboard':
-    st.title(f"📊 Dashboard Enjambre VRA | Admin: {st.session_state.usuario['nombre']}")
+    st.title(f"📊 Dashboard Enjambre VRA | Admin: {st.session_state.usuario.get('nombre', '')}")
     
-    # --- PROCESAMIENTO ESPACIAL DE ZONAS ---
     zonas_dict = {}
     if st.session_state.poligono_coords:
         coords_formateadas = [[p[1], p[0]] for p in st.session_state.poligono_coords]
@@ -219,30 +218,29 @@ elif st.session_state.paso == 'dashboard':
             c_lat, c_lon = st.session_state.centro_mapa
             centroide = [c_lat, c_lon]
             t1, t2 = n // 3, 2 * (n // 3)
-            
             zonas_dict["Zona Óptima (Verde)"] = [centroide] + pts[0:t1+1] + [centroide]
             zonas_dict["Zona Media (Amarilla)"] = [centroide] + pts[t1:t2+1] + [centroide]
             zonas_dict["Zona Crítica (Roja)"] = [centroide] + pts[t2:] + [pts[0], centroide]
 
     with st.sidebar:
-        st.header("🕒 Cronograma Operativo (Autónomo)")
+        st.header("🕒 Cronograma Operativo")
         st.markdown('<div class="horario-auto">💧 <b>05:30 AM</b> - Riego General</div>', unsafe_allow_html=True)
         st.markdown('<div class="horario-auto">🧪 <b>08:00 AM</b> - Aplicación Vitaminas</div>', unsafe_allow_html=True)
         st.markdown('<div class="horario-auto">🛡️ <b>06:00 PM</b> - Control Antiplagas</div>', unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["🌱 1. Sensores y Suelo", "🚁 2. Logística Dron", "📈 3. Reporte y WhatsApp"])
+    tab1, tab2, tab3 = st.tabs(["🌱 1. Sensores y Suelo", "🚁 2. Logística Dron", "📈 3. Reporte Diario y WhatsApp"])
     
+    # ---------------- PESTAÑA 1: SENSORES ----------------
     with tab1:
-        st.write("Datos extraídos en tiempo real de la zona satelital seleccionada.")
         clima_cols = st.columns(4)
         temp_real, hum_real, viento_real = st.session_state.clima_real["temp"], st.session_state.clima_real["hum"], st.session_state.clima_real["viento"]
         
-        clima_cols[0].metric("Temp. Zona Seleccionada", f"{temp_real}°C", "Sensory Data")
-        clima_cols[1].metric("Humedad Ambiental", f"{hum_real}%", "IoT")
-        clima_cols[2].metric("Velocidad de Viento", f"{viento_real} km/h", "Drone Safe" if viento_real < 25 else "-Riesgo Vuelo")
-        clima_cols[3].metric("Radiación / Evaporación", "Alta" if temp_real > 26 else "Normal", "-Riesgo Foliar" if temp_real > 26 else "Óptimo")
-        
+        clima_cols[0].metric("Temp. Zona Seleccionada", f"{temp_real}°C", "↑ Sensory Data")
+        clima_cols[1].metric("Humedad Ambiental", f"{hum_real}%", "↑ IoT")
+        clima_cols[2].metric("Velocidad de Viento", f"{viento_real} km/h", "↑ Drone Safe" if viento_real < 25 else "↓ Riesgo Vuelo")
+        clima_cols[3].metric("Radiación / Evaporación", "Alta" if temp_real > 26 else "Normal", "↓ Riesgo Foliar" if temp_real > 26 else "↑ Óptimo")
         st.markdown("---")
+        
         nombres_cultivos = list(st.session_state.cultivos_asignados.keys())
         zonas_cols = st.columns(3)
         if len(nombres_cultivos) > 0:
@@ -252,53 +250,35 @@ elif st.session_state.paso == 'dashboard':
         with zonas_cols[2]:
             st.markdown(f'<div class="sensor-rojo"><b>🚨 Zona de Riesgo</b><br>Humedad Suelo: {"22%" if hum_real > 40 else "15% (CRÍTICO)"}<br>Alerta hídrica<br>Requiere Atención</div>', unsafe_allow_html=True)
 
-    # ---------------- PESTAÑA 2: DRON QUIRÚRGICO ----------------
+    # ---------------- PESTAÑA 2: DRON SILENCIOSO ----------------
     with tab2:
         st.header("Centro de Mando Logístico VRA")
         col_ctrl, col_map = st.columns([1, 2])
-        ruta_calculada = []
-        color_ruta = "cyan"
+        ruta_calculada, color_ruta = [], "cyan"
         
         with col_ctrl:
-            st.subheader("Control Manual Excepcional")
             hora_actual = st.slider("Reloj:", 0, 23, 14, format="%d:00 hrs")
             tipo_mision = st.radio("Acción a ejecutar:", ["Riego de Emergencia", "Nutrición (Proteínas)", "Tratamiento (Anti-plagas)"])
-            
-            # NUEVO: SELECTOR DE ZONA OBJETIVO
-            opciones_zonas = list(zonas_dict.keys()) if zonas_dict else ["Toda la Parcela"]
-            zona_objetivo = st.selectbox("Sector Objetivo de Vuelo (Focalizado):", opciones_zonas)
-            
+            zona_objetivo = st.selectbox("Sector Objetivo de Vuelo (Focalizado):", list(zonas_dict.keys()) if zonas_dict else ["Toda la Parcela"])
             patron_vuelo = st.selectbox("Patrón de Despliegue Táctico:", ["Zig-Zag (Cobertura Total)", "Espiral (Foco Central)", "Perimetral (Bordes)"])
             
             es_riesgoso = (tipo_mision == "Riego de Emergencia" and 10 <= hora_actual <= 18)
-            boton_deshabilitado = False
-            if es_riesgoso:
-                st.error("⚠️ ADVERTENCIA: Riego diurno detectado (Efecto lupa).")
-                if not st.checkbox("Declaro entender los riesgos y autorizo."): boton_deshabilitado = True 
+            boton_deshabilitado = es_riesgoso and not st.checkbox("Declaro entender los riesgos y autorizo.") 
             
             if st.button("🚀 Forzar Despliegue Focalizado", type="primary", disabled=boton_deshabilitado, use_container_width=True):
-                
-                # OPTIMIZACIÓN DE RECURSOS: Si elige una zona, gasta menos agua.
-                area_vuelo = st.session_state.parcela_area
-                if zona_objetivo != "Toda la Parcela":
-                    area_vuelo = st.session_state.parcela_area / 3
-                
+                area_vuelo = st.session_state.parcela_area if zona_objetivo == "Toda la Parcela" else st.session_state.parcela_area / 3
                 litros_usados = round(area_vuelo * 0.5, 1) if tipo_mision == "Riego de Emergencia" else 0
                 st.session_state.total_litros_hoy += litros_usados
-                
                 color_ruta = "cyan" if tipo_mision == "Riego de Emergencia" else ("orange" if tipo_mision == "Nutrición (Proteínas)" else "red")
                 
-                # ENVIAMOS SOLO LA ZONA ELEGIDA AL ALGORITMO
-                coords_objetivo = zonas_dict.get(zona_objetivo, [])
-                ruta_calculada = calcular_ruta_patron(coords_objetivo, patron_vuelo, st.session_state.centro_mapa[0], st.session_state.centro_mapa[1])
+                ruta_calculada = calcular_ruta_patron(zonas_dict.get(zona_objetivo, []), patron_vuelo, st.session_state.centro_mapa[0], st.session_state.centro_mapa[1])
                 
                 with st.spinner(f"Calculando trayectoria para {zona_objetivo}..."):
                     time.sleep(2)
-                    st.success(f"✅ Dron en vuelo. Objetivo: {zona_objetivo}")
-                    if litros_usados > 0: 
-                        st.info(f"💧 Agua calculada para este sector: {litros_usados} L. (Ahorro del 66% respecto a parcela completa)")
-                    st.toast(f"📧 Correo SMTP enviado a {st.session_state.usuario['email']}", icon="✅")
+                    st.success(f"✅ Dron en vuelo silencioso. Objetivo: {zona_objetivo}")
+                    if litros_usados > 0: st.info(f"💧 Agua calculada: {litros_usados} L. (Ahorro validado)")
                     
+                    # Agregamos a la bitácora de forma silenciosa
                     st.session_state.registro_diario.append({
                         "Hora": f"{hora_actual}:00", "Misión": tipo_mision, "Objetivo": zona_objetivo,
                         "Agua Usada": f"{litros_usados} L", "Estado": "Completado"
@@ -306,35 +286,66 @@ elif st.session_state.paso == 'dashboard':
         
         with col_map:
             st.markdown("**Monitor de Vuelo: Tratamiento Focalizado (Spot Spraying)**")
-            
-            mapa_dron = folium.Map(
-                location=st.session_state.centro_mapa, 
-                zoom_start=15, 
-                tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", 
-                attr="Esri", 
-                zoom_control=False, scrollWheelZoom=False, dragging=False, touchZoom=False, doubleClickZoom=False, keyboard=False
-            )
-            
+            mapa_dron = folium.Map(location=st.session_state.centro_mapa, zoom_start=15, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri", zoom_control=False, scrollWheelZoom=False, dragging=False, touchZoom=False, doubleClickZoom=False)
             if "Zona Óptima (Verde)" in zonas_dict:
                 folium.Polygon(locations=zonas_dict["Zona Óptima (Verde)"], color="green", fill=True, fill_color="green", fill_opacity=0.45).add_to(mapa_dron)
                 folium.Polygon(locations=zonas_dict["Zona Media (Amarilla)"], color="yellow", fill=True, fill_color="yellow", fill_opacity=0.45).add_to(mapa_dron)
                 folium.Polygon(locations=zonas_dict["Zona Crítica (Roja)"], color="red", fill=True, fill_color="red", fill_opacity=0.45).add_to(mapa_dron)
             elif "Toda la Parcela" in zonas_dict:
                 folium.Polygon(locations=zonas_dict["Toda la Parcela"], color="gray", fill=True, fill_opacity=0.4).add_to(mapa_dron)
-            
             if ruta_calculada:
                 plugins.AntPath(locations=ruta_calculada, dash_array=[10, 20], delay=800, color=color_ruta, weight=5, pulse_color='white').add_to(mapa_dron)
-            
             st_folium(mapa_dron, width=700, height=400, returned_objects=[])
 
+    # ---------------- PESTAÑA 3: BITÁCORA Y REPORTE EJECUTIVO (SOLO TWILIO) ----------------
     with tab3:
-        st.header("Bitácora y Costos")
+        st.header("Bitácora de Monitoreo")
         if st.session_state.registro_diario:
             st.dataframe(pd.DataFrame(st.session_state.registro_diario), use_container_width=True)
-        else: st.write("Aún no se han registrado vuelos hoy.")
+        else: st.write("Aún no se han registrado operaciones hoy.")
+            
         st.markdown("---")
-        st.subheader("📲 Exportación Automática")
-        resumen_texto = f"""*REPORTE ENJAMBRE VRA* 🚁🌱\nGerente: {st.session_state.usuario['nombre']}\nÁrea cubierta: {st.session_state.parcela_area} m2\n💧 *Agua Utilizada Hoy: {st.session_state.total_litros_hoy} Litros*\nEstado: ESTABLE ✅"""
-        st.text_area("Mensaje a enviar:", value=resumen_texto, height=150, disabled=True)
-        link_whatsapp = f"https://api.whatsapp.com/send?phone={st.session_state.usuario['telefono']}&text={urllib.parse.quote(resumen_texto)}"
-        st.markdown(f'<a href="{link_whatsapp}" target="_blank" class="whatsapp-btn">📲 Enviar Reporte Real por WhatsApp</a>', unsafe_allow_html=True)
+        st.subheader("📲 Exportación de Reporte Oficial")
+        st.write("Envíe el resumen gerencial directamente a WhatsApp vía Twilio API.")
+        
+        vuelos_riego = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Riego de Emergencia")
+        vuelos_nutricion = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Nutrición (Proteínas)")
+        vuelos_plagas = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Tratamiento (Anti-plagas)")
+        
+        cultivos_str = ', '.join(st.session_state.cultivos_asignados.keys()) if st.session_state.cultivos_asignados else 'Ninguno'
+        alerta_zona = "Requiere Atención" if hum_real > 40 else "CRÍTICO - Alerta Hídrica"
+        
+        resumen_texto_profesional = f"""*📋 REPORTE EJECUTIVO - ENJAMBRE VRA* 🚁🌱
+-----------------------------------
+*👤 Gerente Agrícola:* {st.session_state.usuario.get('nombre', '')}
+*📍 Área Total:* {st.session_state.parcela_area} m²
+*🌾 Cultivos Activos:* {cultivos_str}
+
+*☁️ CONDICIONES AGROCLIMÁTICAS*
+🌡️ Temp: {temp_real}°C | 💧 Humedad: {hum_real}% | 💨 Viento: {viento_real} km/h
+
+*📊 ESTADO DE SENSORES Y ZONAS*
+🟢 Zona Óptima: Estable
+🟡 Zona Media: Estrés Leve
+🔴 Zona Crítica: {alerta_zona}
+
+*🚀 OPERACIONES REALIZADAS HOY*
+🚁 Total Vuelos Desplegados: {len(st.session_state.registro_diario)}
+  • 💧 Riegos de Emergencia: {vuelos_riego}
+  • 💊 Nutrición (Proteínas): {vuelos_nutricion}
+  • 🛡️ Tratamiento (Antiplagas): {vuelos_plagas}
+
+*📊 OPTIMIZACIÓN DE RECURSOS*
+💧 Consumo Hídrico Total: {st.session_state.total_litros_hoy} Litros
+
+_Generado automáticamente por Enjambre VRA._"""
+        
+        st.text_area("Previsualización del Mensaje:", value=resumen_texto_profesional, height=450, disabled=True)
+        
+        if st.button("🚀 Enviar Reporte Oficial por Twilio", type="primary", use_container_width=True):
+            with st.spinner("Conectando con servidores de Twilio..."):
+                exito, msj = enviar_whatsapp_twilio(resumen_texto_profesional, st.session_state.usuario.get('telefono', ''))
+                if exito: 
+                    st.success("✅ Mensaje enviado con éxito a tu celular vía API.")
+                else: 
+                    st.error(f"❌ Falló el envío. Revisa tus Secrets o Sandbox de Twilio: {msj}")
