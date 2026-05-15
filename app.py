@@ -55,8 +55,17 @@ st.markdown(f"""
 @keyframes moverFondoCampo {{ 0% {{ background-position: center center; }} 50% {{ background-position: center top; }} 100% {{ background-position: center bottom; }} }}
 .stApp::before {{ content: ""; position: fixed; top: 0; left: 0; width: 200%; height: 200%; pointer-events: none; z-index: 0; background-image: radial-gradient(circle, rgba(134, 239, 172, 0.1) 2px, transparent 3px); background-size: 150px 150px; animation: particulas 40s linear infinite; }}
 @keyframes particulas {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-200px, -200px); }} }}
-.block-container {{ position: relative; z-index: 2; }}
+.block-container {{ position: relative; z-index: 2; padding-top: 2rem; padding-bottom: 2rem;}}
 [data-testid="stForm"] {{ background: rgba(0, 45, 20, 0.58); border-radius: 24px; border: 1px solid rgba(187, 247, 208, 0.2); backdrop-filter: blur(14px); }}
+[data-testid="stMetric"] {{ background: rgba(0, 45, 20, 0.42); padding: 18px; border-radius: 18px; border: 1px solid rgba(187, 247, 208, 0.20); box-shadow: 0 12px 35px rgba(0, 0, 0, 0.24); }}
+button[data-baseweb="tab"] {{ background: rgba(0, 45, 20, 0.42); border-radius: 14px; color: white; margin-right: 8px; border: 1px solid rgba(187, 247, 208, 0.18); }}
+button[data-baseweb="tab"]:hover {{ background: rgba(34, 197, 94, 0.25); }}
+h1, h2, h3, h4, p, label, span {{ color: white; }}
+.stTextInput input, .stNumberInput input, .stSelectbox div, .stMultiSelect div {{ border-radius: 12px; }}
+.stButton > button {{ border-radius: 14px; font-weight: 700; border: none; background: linear-gradient(135deg, #22c55e, #15803d); color: white; box-shadow: 0 8px 25px rgba(34, 197, 94, 0.25); }}
+.stButton > button:hover {{ background: linear-gradient(135deg, #16a34a, #166534); color: white; transform: scale(1.01); }}
+[data-testid="stDataFrame"], [data-testid="stAlert"] {{ border-radius: 18px; }}
+section[data-testid="stSidebar"] {{ background: rgba(2, 44, 34, 0.94); border-right: 1px solid rgba(187, 247, 208, 0.20); }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -298,10 +307,20 @@ elif st.session_state.paso == 'dashboard':
         st.markdown('<div class="horario-auto">💧 <b>05:30 AM</b> - Riego General</div>', unsafe_allow_html=True)
         st.markdown('<div class="horario-auto">🧪 <b>08:00 AM</b> - Aplicación Vitaminas</div>', unsafe_allow_html=True)
         st.markdown('<div class="horario-auto">🛡️ <b>06:00 PM</b> - Control Antiplagas</div>', unsafe_allow_html=True)
+        
+        # 🚀 SOLUCIÓN: RESTAURADO EL BALANCE DE SUPERFICIE
         st.markdown("---")
-        st.header("📏 Balance Geométrico")
+        st.header("📊 Balance de Superficie")
+        area_t = st.session_state.parcela_area
         area_u = sum(v['area'] for v in st.session_state.cultivos_mapeados.values())
-        st.write(f"**📍 Total:** {st.session_state.parcela_area:,.0f} m²"); st.write(f"**✅ Usado:** {area_u:,.0f} m²"); st.progress(min(area_u / st.session_state.parcela_area, 1.0))
+        area_l = max(0, area_t - area_u)
+        
+        st.write(f"**📍 Área Total:** {area_t:,.0f} m²")
+        st.write(f"**✅ Área Utilizada:** {area_u:,.0f} m²")
+        for k, v in st.session_state.cultivos_mapeados.items():
+            st.markdown(f"<div style='padding-left: 20px; font-size: 14px;'>🌱 {v['nombre']}: {v['area']:,.0f} m²</div>", unsafe_allow_html=True)
+        st.write(f"**⬜ Área Libre:** {area_l:,.0f} m²")
+        st.progress(min(area_u / area_t, 1.0) if area_t > 0 else 0.0)
 
     tab1, tab2, tab3, tab4 = st.tabs(["🌱 Sensores", "🚁 Logística Dron", "📈 Reporte Maestro", "📉 Gemelo Digital (IA)"])
     
@@ -337,10 +356,25 @@ elif st.session_state.paso == 'dashboard':
                 st.rerun()
         with col_m:
             map_d = folium.Map(location=c, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
-            for s in st.session_state.cultivos_mapeados.values(): folium.Polygon(locations=s['coords'], color=s['color'], fill=True, fill_opacity=0.2).add_to(map_d)
+            
+            # 🚀 SOLUCIÓN: RESTAURADO EL ORDEN VISUAL DEL MAPA
+            # 1. Cultivos muy transparentes al fondo
+            for s in st.session_state.cultivos_mapeados.values(): 
+                folium.Polygon(locations=s['coords'], color=s['color'], fill=True, fill_opacity=0.2).add_to(map_d)
+            
+            # 2. Zonas de riesgo brillantes por encima
+            if "Zona Óptima" in zonas_v and len(zonas_v["Zona Óptima"]) > 2:
+                folium.Polygon(locations=zonas_v["Zona Óptima"], color="#28a745", weight=2, fill=True, fill_color="#28a745", fill_opacity=0.45, tooltip="Zona Óptima (>60% Humedad)").add_to(map_d)
+                folium.Polygon(locations=zonas_v["Zona Media"], color="#ffc107", weight=2, fill=True, fill_color="#ffc107", fill_opacity=0.45, tooltip="Zona Media (40-60% Humedad)").add_to(map_d)
+                folium.Polygon(locations=zonas_v["Zona Crítica"], color="#dc3545", weight=2, fill=True, fill_color="#dc3545", fill_opacity=0.55, tooltip="Zona Crítica (<30% Humedad)").add_to(map_d)
+
+            # 3. Ruta del dron y animación
             if st.session_state.ruta_dron_actual: 
                 plugins.AntPath(locations=st.session_state.ruta_dron_actual, color=st.session_state.color_dron_actual, weight=5).add_to(map_d)
-                if st.session_state.get('mostrar_animacion_dron'): map_d.get_root().add_child(MoveDrone(st.session_state.ruta_dron_actual)); st.session_state.mostrar_animacion_dron = False
+                if st.session_state.get('mostrar_animacion_dron'): 
+                    map_d.get_root().add_child(MoveDrone(st.session_state.ruta_dron_actual))
+                    st.session_state.mostrar_animacion_dron = False
+            
             st_folium(map_d, height=450, use_container_width=True)
 
     with tab3:
@@ -355,7 +389,7 @@ elif st.session_state.paso == 'dashboard':
     with tab4:
         st.header("📉 Gemelo Digital: Proyección de Cosecha (IA)")
         st.markdown('<div class="ai-card"><h3>Simulador de Rendimiento Predictivo</h3>Ajuste el presupuesto hídrico para ver cómo la IA de Enjambre VRA predice su producción.</div>', unsafe_allow_html=True)
-        # MATEMÁTICA IA: Yield = m2 * YieldBase * EfficiencyCurve
+        
         inversion = st.select_slider("Factor de Optimización VRA:", options=["Mínimo", "Tradicional", "Optimizado VRA", "Máximo Rendimiento"], value="Optimizado VRA")
         eficiencia = {"Mínimo": 0.4, "Tradicional": 0.75, "Optimizado VRA": 1.0, "Máximo Rendimiento": 0.95}[inversion]
         
@@ -364,12 +398,28 @@ elif st.session_state.paso == 'dashboard':
             db = DB_CULTIVOS_PLAS.get(v['nombre'], {"yield_base": 10, "price_ton": 1000})
             ton_esperadas = (v['area'] / 10000) * db['yield_base'] * eficiencia
             ganancia = ton_esperadas * db['price_ton']
-            datos_sim.append({"Cultivo": v['nombre'], "Area (m²)": v['area'], "Cosecha (Ton)": round(ton_esperadas, 2), "Ingresos Est. ($)": round(ganancia, 0)})
-        
+            
+            # 🚀 SOLUCIÓN: NÚMEROS FORMATEADOS Y LIMPIOS
+            datos_sim.append({
+                "Cultivo": v['nombre'], 
+                "Área (m²)": f"{v['area']:,.0f}", 
+                "Cosecha (Ton)": f"{ton_esperadas:,.1f}", 
+                "Ingresos Est. ($)": f"${ganancia:,.0f}"
+            })
+            
         if datos_sim:
-            df_sim = pd.DataFrame(datos_sim)
+            # Gráfico de barras usando los datos crudos
+            df_crudo = pd.DataFrame([{ "Cultivo": d["Cultivo"], "Cosecha (Ton)": float(d["Cosecha (Ton)"].replace(',', '')) } for d in datos_sim])
+            
             c1, c2 = st.columns(2)
-            with c1: st.subheader("Predicción de Producción"); st.bar_chart(df_sim.set_index("Cultivo")["Cosecha (Ton)"])
-            with c2: st.subheader("Proyección Económica"); st.table(df_sim)
+            with c1: 
+                st.subheader("Predicción de Producción")
+                st.bar_chart(df_crudo.set_index("Cultivo")["Cosecha (Ton)"])
+            with c2: 
+                st.subheader("Proyección Económica")
+                # Tabla ancha y profesional
+                st.dataframe(pd.DataFrame(datos_sim), use_container_width=True, hide_index=True)
+                
             st.success(f"💡 Sugerencia IA: Mantener el escenario '{inversion}' para maximizar el ROI foliar.")
-        else: st.warning("Mapee sectores en la Fase 3 para generar el Gemelo Digital.")
+        else: 
+            st.warning("Mapee sectores en la Fase 3 para generar el Gemelo Digital.")
