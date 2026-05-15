@@ -151,6 +151,8 @@ def calcular_area_poligono(coords):
 
 def enviar_whatsapp_twilio(mensaje, telefono_destino):
     try:
+        required_secrets = ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE"]
+        if [s for s in required_secrets if s not in st.secrets]: return False, "Faltan secrets"
         client = Client(st.secrets["TWILIO_ACCOUNT_SID"], st.secrets["TWILIO_AUTH_TOKEN"])
         message = client.messages.create(body=mensaje, from_=st.secrets["TWILIO_PHONE"], to=f"whatsapp:+{telefono_destino}")
         return True, message.sid
@@ -250,7 +252,7 @@ elif st.session_state.paso == 'onboarding_mapa':
 # ==========================================
 elif st.session_state.paso == 'onboarding_cultivos':
     st.header("🌾 Fase PLAS: Mapeo de Sectores Productivos")
-    st.write(f"Área Disponible: **{st.session_state.parcela_area:,.0f} m²**")
+    st.write(f"Área Disponible: **{st.session_state.parcela_area:,} m²**")
     
     col_ctrl, col_map = st.columns([1, 2])
     
@@ -284,12 +286,13 @@ elif st.session_state.paso == 'onboarding_cultivos':
         
         if st.session_state.cultivos_mapeados:
             if st.button("✅ FINALIZAR MAPEADO E IR AL DASHBOARD", type="primary", use_container_width=True):
+                st.session_state.cultivos_asignados = {v['nombre']: v['area'] for v in st.session_state.cultivos_mapeados.values()}
                 st.session_state.agua_requerida_total = sum(v['agua'] for v in st.session_state.cultivos_mapeados.values())
                 st.session_state.paso = 'dashboard'; st.rerun()
 
     with col_map:
         st.markdown("**Interactúe con el mapa para delimitar los sectores:**")
-        m_plas = folium.Map(location=st.session_state.centro_mapa, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+        m_plas = folium.Map(location=st.session_state.centro_mapa, zoom_start=17, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
         
         if st.session_state.poligono_coords:
             folium.Polygon(locations=[[p[1], p[0]] for p in st.session_state.poligono_coords], color="white", weight=2, dash_array='5, 5', fill=False).add_to(m_plas)
@@ -326,23 +329,16 @@ elif st.session_state.paso == 'dashboard':
         c1.metric("Temperatura", f"{temp_r}°C", "Sensory"); c2.metric("Humedad", f"{hum_r}%", "IoT"); c3.metric("Viento", f"{vent_r} km/h", "Drone Safe"); c4.metric("Radiación", "Normal", "Óptimo")
         st.markdown("---")
         
-        # 🚀 SOLUCIÓN: COLUMNAS DINÁMICAS (Se ajustan sin importar si son 2, 4, o 10 cultivos)
         list_m = list(st.session_state.cultivos_mapeados.values())
         if len(list_m) > 0:
-            num_cols = len(list_m) + 1 # +1 para la tarjeta de Riesgo
+            num_cols = len(list_m) + 1 
             cols_s = st.columns(num_cols)
-            
             for i, sector in enumerate(list_m):
-                # Intercalamos verde y amarillo solo por visualización
                 clase_css = "sensor-verde" if i % 2 == 0 else "sensor-amarillo"
                 humedad_sim = "68%" if i % 2 == 0 else "45%"
-                with cols_s[i]: 
-                    st.markdown(f'<div class="{clase_css}"><b>{sector["nombre"]}</b><br>{sector["area"]:,.0f} m²<br>Humedad: {humedad_sim}</div>', unsafe_allow_html=True)
-            
-            with cols_s[-1]: 
-                st.markdown('<div class="sensor-rojo"><b>🚨 Riesgo Global</b><br>Humedad: 15%</div>', unsafe_allow_html=True)
+                with cols_s[i]: st.markdown(f'<div class="{clase_css}"><b>{sector["nombre"]}</b><br>{sector["area"]:,.0f} m²<br>Humedad: {humedad_sim}</div>', unsafe_allow_html=True)
+            with cols_s[-1]: st.markdown('<div class="sensor-rojo"><b>🚨 Riesgo Global</b><br>Humedad: 15%</div>', unsafe_allow_html=True)
         else:
-            # Fallback en caso de que no haya sectores mapeados
             cols_s = st.columns(3)
             with cols_s[0]: st.markdown('<div class="sensor-verde"><b>Sector A: No asignado</b><br>0 m²</div>', unsafe_allow_html=True)
             with cols_s[1]: st.markdown('<div class="sensor-amarillo"><b>Sector B: No asignado</b><br>0 m²</div>', unsafe_allow_html=True)
@@ -364,9 +360,20 @@ elif st.session_state.paso == 'dashboard':
                 st.session_state.registro_diario.append({"Hora": f"{date.today()}", "Misión": tipo_m, "Zona": zona_o, "Agua": f"{litros} L"})
         with col_m:
             map_d = folium.Map(location=c, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+            
+            # 1. CAPA INFERIOR: Cultivos mapeados manuales (Alta transparencia para no saturar)
             for s in st.session_state.cultivos_mapeados.values():
-                folium.Polygon(locations=s['coords'], color=s['color'], fill=True, fill_opacity=0.4).add_to(map_d)
+                folium.Polygon(locations=s['coords'], color=s['color'], weight=1, fill=True, fill_opacity=0.2, tooltip=f"Cultivo: {s['nombre']}").add_to(map_d)
+            
+            # 2. CAPA SUPERIOR: Zonas Matemáticas de Estrés Hídrico (Colores fuertes y predominantes)
+            if "Zona Óptima" in zonas_v and len(zonas_v["Zona Óptima"]) > 2:
+                folium.Polygon(locations=zonas_v["Zona Óptima"], color="#28a745", weight=2, fill=True, fill_color="#28a745", fill_opacity=0.45, tooltip="Zona Óptima (>60% Humedad)").add_to(map_d)
+                folium.Polygon(locations=zonas_v["Zona Media"], color="#ffc107", weight=2, fill=True, fill_color="#ffc107", fill_opacity=0.45, tooltip="Zona Media (40-60% Humedad)").add_to(map_d)
+                folium.Polygon(locations=zonas_v["Zona Crítica"], color="#dc3545", weight=2, fill=True, fill_color="#dc3545", fill_opacity=0.55, tooltip="Zona Crítica (<30% Humedad)").add_to(map_d)
+
+            # 3. RUTA DEL DRON
             if ruta_c: plugins.AntPath(locations=ruta_c, color=color_r, weight=5).add_to(map_d)
+            
             st_folium(map_d, height=400, use_container_width=True)
 
     with tab3:
@@ -378,13 +385,11 @@ elif st.session_state.paso == 'dashboard':
         v_p = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Tratamiento (Anti-plagas)")
         alerta_z = "Requiere Atención" if hum_r > 40 else "CRÍTICO - Alerta Hídrica"
         
-        # 🚀 SOLUCIÓN: REPORTE WHATSAPP CON DETALLE ESPECÍFICO POR SECTORES
         detalles_sectores = ""
         for v in st.session_state.cultivos_mapeados.values():
             detalles_sectores += f"  🌱 {v['nombre']}: {v['area']:,.0f} m² | 💧 Req: {v['agua']:,.1f} L\n"
         
-        if not detalles_sectores:
-            detalles_sectores = "  • Sin sectores mapeados\n"
+        if not detalles_sectores: detalles_sectores = "  • Sin sectores mapeados\n"
             
         msg_profesional = f"""*📋 REPORTE EJECUTIVO - ENJAMBRE VRA* 🚁🌱
 -----------------------------------
