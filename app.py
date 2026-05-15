@@ -112,16 +112,16 @@ st.markdown("""
 
 # --- 🚀 BASE DE DATOS PLAS (CHILE) ---
 DB_CULTIVOS_PLAS = {
-    "Cerezas": {"agua_m2": 4.5, "color": "#d32f2f"},          # Rojo Oscuro
-    "Uva Vinífera": {"agua_m2": 2.5, "color": "#7b1fa2"},     # Uva
-    "Paltos": {"agua_m2": 6.0, "color": "#388e3c"},           # Verde Palto
-    "Nogales": {"agua_m2": 5.5, "color": "#795548"},          # Café Nogal
-    "Maíz": {"agua_m2": 4.0, "color": "#fbc02d"},             # Amarillo Maíz
-    "Trigo": {"agua_m2": 3.0, "color": "#ffa000"},            # Dorado Trigo
-    "Arándanos": {"agua_m2": 3.5, "color": "#1976d2"},        # Azul Arándano
-    "Cítricos (Limones)": {"agua_m2": 4.0, "color": "#cddc39"},# Lima
-    "Manzanos": {"agua_m2": 4.2, "color": "#8bc34a"},         # Verde Manzana
-    "Tomates": {"agua_m2": 5.0, "color": "#e64a19"}           # Naranja Tomate
+    "Cerezas": {"agua_m2": 4.5, "color": "#d32f2f"},          
+    "Uva Vinífera": {"agua_m2": 2.5, "color": "#7b1fa2"},     
+    "Paltos": {"agua_m2": 6.0, "color": "#388e3c"},           
+    "Nogales": {"agua_m2": 5.5, "color": "#795548"},          
+    "Maíz": {"agua_m2": 4.0, "color": "#fbc02d"},             
+    "Trigo": {"agua_m2": 3.0, "color": "#ffa000"},            
+    "Arándanos": {"agua_m2": 3.5, "color": "#1976d2"},        
+    "Cítricos (Limones)": {"agua_m2": 4.0, "color": "#cddc39"},
+    "Manzanos": {"agua_m2": 4.2, "color": "#8bc34a"},         
+    "Tomates": {"agua_m2": 5.0, "color": "#e64a19"}           
 }
 
 # --- MEMORIA DEL SISTEMA ---
@@ -139,12 +139,16 @@ if 'total_litros_hoy' not in st.session_state: st.session_state.total_litros_hoy
 
 # --- 🚀 FUNCIONES MATEMÁTICAS SATELITALES (GOOGLE EARTH ENGINE STYLE) ---
 def calcular_area_poligono(coords):
-    """Calcula el área en m2 usando trigonometría esférica plana (Fórmula Shoelace)"""
+    """Calcula el área exacta en metros cuadrados usando trigonometría esférica de la Tierra"""
     if not coords or len(coords) < 3: return 0
-    R = 6378137 # Radio tierra
+    R = 6378137 # Radio aproximado de la tierra en metros
     lats = [p[1] for p in coords]
     mean_lat = math.radians(sum(lats) / len(lats))
+    
+    # Proyección plana
     pts_meters = [(R * math.radians(p[0]) * math.cos(mean_lat), R * math.radians(p[1])) for p in coords]
+    
+    # Fórmula del Área de Gauss (Shoelace)
     area = 0
     n = len(pts_meters)
     for i in range(n):
@@ -157,9 +161,7 @@ def generar_poligonos_cultivos(coords, asignaciones):
     """Algoritmo de Fragmentación Geoespacial Proporcional"""
     total_area = sum(asignaciones.values())
     if total_area == 0 or not coords: return {}
-    
     pts_base = coords[:-1] if coords[0] == coords[-1] else coords
-    # Interpolamos 100 puntos en el perímetro para hacer cortes precisos
     perimetro, segmentos = 0, []
     for i in range(len(pts_base)):
         p1, p2 = pts_base[i], pts_base[(i+1)%len(pts_base)]
@@ -183,7 +185,6 @@ def generar_poligonos_cultivos(coords, asignaciones):
         puntos_asignados = max(1, int(round(n * (area / total_area))))
         idx_fin = min(idx_actual + puntos_asignados, n)
         if list(asignaciones.keys())[-1] == cultivo: idx_fin = n
-        
         borde = pts_int[idx_actual:idx_fin]
         borde.append(pts_int[idx_fin] if idx_fin < n else pts_int[0])
         poligonos[cultivo] = [centroide] + borde + [centroide]
@@ -285,14 +286,15 @@ elif st.session_state.paso == 'onboarding_mapa':
 
     st.write("📍 **Paso 2:** Utilice Polígono ⬠ o Rectángulo ⬜ para dibujar su parcela. El sistema calculará el área automáticamente.")
     
+    # MAPA: Herramientas restringidas (Círculo, Marcadores desactivados)
     mapa_dibujo = folium.Map(location=st.session_state.mapa_buscador_inicial, zoom_start=15, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
-    # CONFIGURACIÓN ESTRICTA: Solo Polígono y Rectángulo habilitados
     opciones_dibujo = {'polyline': False, 'polygon': True, 'rectangle': True, 'circle': False, 'marker': False, 'circlemarker': False}
     draw = plugins.Draw(export=True, position='topleft', draw_options=opciones_dibujo)
     draw.add_to(mapa_dibujo)
     
     mapa_data = st_folium(mapa_dibujo, height=450, use_container_width=True, key="dibujo_inicial")
     
+    # CÁLCULO DE ÁREA SATELITAL SIN INGRESO MANUAL
     area_calculada = 0
     if mapa_data and mapa_data.get("all_drawings"):
         dibujo = mapa_data["all_drawings"][0]
@@ -300,7 +302,7 @@ elif st.session_state.paso == 'onboarding_mapa':
         area_calculada = calcular_area_poligono(st.session_state.poligono_coords)
         st.success(f"✅ Satélite detecta un polígono válido. Área calculada computacionalmente: **{area_calculada:,.1f} m²**")
     else:
-        st.info("ℹ️ Dibuje un polígono en el mapa para activar el cálculo satelital de área.")
+        st.info("ℹ️ Dibuje un polígono o rectángulo en el mapa para activar el cálculo satelital de área.")
     
     if st.button("Confirmar Área y Continuar ➡️", type="primary"):
         if area_calculada > 0:
@@ -315,7 +317,7 @@ elif st.session_state.paso == 'onboarding_mapa':
             st.error("❌ Por favor, trace el terreno en el mapa antes de continuar.")
 
 # ==========================================
-# FASE 3: CULTIVOS (CON PLATAFORMA PLAS Y MAPA)
+# FASE 3: CULTIVOS (CON PLATAFORMA PLAS Y MAPA MANIPULABLE)
 # ==========================================
 elif st.session_state.paso == 'onboarding_cultivos':
     st.header("🌾 Fase PLAS: Distribución Satelital de Plantaciones")
@@ -349,8 +351,13 @@ elif st.session_state.paso == 'onboarding_cultivos':
                     st.rerun()
 
     with col_mapa:
-        st.markdown("**Visualización Espacial PLAS (Distribución proporcional):**")
-        mapa_cultivos = folium.Map(location=st.session_state.centro_mapa, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri", zoom_control=False, scrollWheelZoom=False, dragging=False)
+        st.markdown("**Visualización Espacial PLAS (Manipulable):**")
+        # MAPA DESBLOQUEADO: Se permite zoom y arrastrar libremente
+        mapa_cultivos = folium.Map(location=st.session_state.centro_mapa, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+        
+        # Agregamos barra Draw para manipular, editar o ajustar visualmente la zona
+        opciones_dibujo = {'polyline': False, 'polygon': True, 'rectangle': True, 'circle': False, 'marker': False, 'circlemarker': False}
+        plugins.Draw(export=True, position='topleft', draw_options=opciones_dibujo, edit_options={'edit': True}).add_to(mapa_cultivos)
         
         if cultivos_seleccionados and area_asignada_total > 0:
             coords = [[p[1], p[0]] for p in st.session_state.poligono_coords]
@@ -361,7 +368,7 @@ elif st.session_state.paso == 'onboarding_cultivos':
         elif st.session_state.poligono_coords:
             folium.Polygon(locations=[[p[1], p[0]] for p in st.session_state.poligono_coords], color="gray", fill=True, fill_opacity=0.3).add_to(mapa_cultivos)
                 
-        st_folium(mapa_cultivos, height=350, use_container_width=True, key="mapa_plas")
+        st_folium(mapa_cultivos, height=450, use_container_width=True, key="mapa_plas")
 
 # ==========================================
 # FASE 4: DASHBOARD PRINCIPAL
@@ -375,6 +382,7 @@ elif st.session_state.paso == 'dashboard':
         pts = coords_formateadas[:-1] if coords_formateadas[0] == coords_formateadas[-1] else coords_formateadas
         n = len(pts)
         zonas_dict["Toda la Parcela"] = coords_formateadas
+        
         if n >= 3:
             c_lat, c_lon = st.session_state.centro_mapa; centroide = [c_lat, c_lon]
             t1, t2 = n // 3, 2 * (n // 3)
@@ -448,7 +456,10 @@ elif st.session_state.paso == 'dashboard':
         
         with col_map:
             st.markdown("**Monitor de Vuelo: Tratamiento Focalizado (Spot Spraying)**")
-            mapa_dron = folium.Map(location=st.session_state.centro_mapa, zoom_start=15, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri", zoom_control=False, scrollWheelZoom=False, dragging=False, touchZoom=False, doubleClickZoom=False)
+            # MAPA DESBLOQUEADO: Se permite interactuar libremente en el dashboard también
+            mapa_dron = folium.Map(location=st.session_state.centro_mapa, zoom_start=15, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+            plugins.Draw(export=True, position='topleft', draw_options={'polyline':False, 'circle':False, 'marker':False, 'circlemarker':False}).add_to(mapa_dron)
+            
             if "Zona Óptima (Verde)" in zonas_dict:
                 folium.Polygon(locations=zonas_dict["Zona Óptima (Verde)"], color="green", fill=True, fill_color="green", fill_opacity=0.45).add_to(mapa_dron)
                 folium.Polygon(locations=zonas_dict["Zona Media (Amarilla)"], color="yellow", fill=True, fill_color="yellow", fill_opacity=0.45).add_to(mapa_dron)
@@ -457,7 +468,8 @@ elif st.session_state.paso == 'dashboard':
                 folium.Polygon(locations=zonas_dict["Toda la Parcela"], color="gray", fill=True, fill_opacity=0.4).add_to(mapa_dron)
             if ruta_calculada:
                 plugins.AntPath(locations=ruta_calculada, dash_array=[10, 20], delay=800, color=color_ruta, weight=5, pulse_color='white').add_to(mapa_dron)
-            st_folium(mapa_dron, height=400, use_container_width=True, returned_objects=[])
+            
+            st_folium(mapa_dron, height=450, use_container_width=True, returned_objects=[])
 
     # ---------------- PESTAÑA 3: BITÁCORA Y REPORTE EJECUTIVO ----------------
     with tab3:
