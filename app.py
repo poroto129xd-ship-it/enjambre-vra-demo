@@ -127,7 +127,7 @@ DB_CULTIVOS_PLAS = {
 if 'paso' not in st.session_state: st.session_state.paso = 'login'
 if 'usuario' not in st.session_state: st.session_state.usuario = {}
 if 'parcela_area' not in st.session_state: st.session_state.parcela_area = 0
-if 'cultivos_mapeados' not in st.session_state: st.session_state.cultivos_mapeados = {} # Formato: {cultivo: {coords, area, agua}}
+if 'cultivos_mapeados' not in st.session_state: st.session_state.cultivos_mapeados = {} 
 if 'registro_diario' not in st.session_state: st.session_state.registro_diario = []
 if 'poligono_coords' not in st.session_state: st.session_state.poligono_coords = None
 if 'centro_mapa' not in st.session_state: st.session_state.centro_mapa = [-33.456, -70.650]
@@ -250,7 +250,7 @@ elif st.session_state.paso == 'onboarding_mapa':
 # ==========================================
 elif st.session_state.paso == 'onboarding_cultivos':
     st.header("🌾 Fase PLAS: Mapeo de Sectores Productivos")
-    st.write(f"Área Disponible: **{st.session_state.parcela_area:,} m²**")
+    st.write(f"Área Disponible: **{st.session_state.parcela_area:,.0f} m²**")
     
     col_ctrl, col_map = st.columns([1, 2])
     
@@ -263,7 +263,6 @@ elif st.session_state.paso == 'onboarding_cultivos':
         st.info(f"Requerimiento PLAS: **{req_h} L/m²**")
         st.write("2. Dibuje el sector de este cultivo en el mapa.")
         
-        # Guardar sector actual
         if st.button("💾 GUARDAR SECTOR MAPEADO", use_container_width=True):
             if 'temp_coords' in st.session_state and st.session_state.temp_coords:
                 area_s = calcular_area_poligono(st.session_state.temp_coords)
@@ -285,20 +284,16 @@ elif st.session_state.paso == 'onboarding_cultivos':
         
         if st.session_state.cultivos_mapeados:
             if st.button("✅ FINALIZAR MAPEADO E IR AL DASHBOARD", type="primary", use_container_width=True):
-                # Formatear para compatibilidad con Dashboard
-                st.session_state.cultivos_asignados = {v['nombre']: v['area'] for v in st.session_state.cultivos_mapeados.values()}
                 st.session_state.agua_requerida_total = sum(v['agua'] for v in st.session_state.cultivos_mapeados.values())
                 st.session_state.paso = 'dashboard'; st.rerun()
 
     with col_map:
         st.markdown("**Interactúe con el mapa para delimitar los sectores:**")
-        m_plas = folium.Map(location=st.session_state.centro_mapa, zoom_start=17, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+        m_plas = folium.Map(location=st.session_state.centro_mapa, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
         
-        # Mostrar el terreno total como referencia
         if st.session_state.poligono_coords:
             folium.Polygon(locations=[[p[1], p[0]] for p in st.session_state.poligono_coords], color="white", weight=2, dash_array='5, 5', fill=False).add_to(m_plas)
         
-        # Mostrar sectores ya mapeados
         for k, v in st.session_state.cultivos_mapeados.items():
             folium.Polygon(locations=v['coords'], color=v['color'], fill=True, fill_opacity=0.6, tooltip=v['nombre']).add_to(m_plas)
 
@@ -314,7 +309,6 @@ elif st.session_state.paso == 'onboarding_cultivos':
 elif st.session_state.paso == 'dashboard':
     st.title(f"📊 Dashboard | Admin: {st.session_state.usuario.get('nombre', '')}")
     
-    # Zonas de estrés para el dron (matemáticas sobre el terreno total)
     pts_t = [[p[1], p[0]] for p in st.session_state.poligono_coords[:-1]]
     n_pts = len(pts_t); c = st.session_state.centro_mapa; t1, t2 = n_pts//3, 2*(n_pts//3)
     zonas_v = {"Toda la Parcela": pts_t, "Zona Óptima": [c]+pts_t[0:t1+1]+[c], "Zona Media": [c]+pts_t[t1:t2+1]+[c], "Zona Crítica": [c]+pts_t[t2:]+[pts_t[0], c]}
@@ -331,32 +325,45 @@ elif st.session_state.paso == 'dashboard':
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Temperatura", f"{temp_r}°C", "Sensory"); c2.metric("Humedad", f"{hum_r}%", "IoT"); c3.metric("Viento", f"{vent_r} km/h", "Drone Safe"); c4.metric("Radiación", "Normal", "Óptimo")
         st.markdown("---")
-        # Mostrar estados de sectores mapeados
-        cols_s = st.columns(3)
+        
+        # 🚀 SOLUCIÓN: COLUMNAS DINÁMICAS (Se ajustan sin importar si son 2, 4, o 10 cultivos)
         list_m = list(st.session_state.cultivos_mapeados.values())
         if len(list_m) > 0:
-            with cols_s[0]: st.markdown(f'<div class="sensor-verde"><b>{list_m[0]["nombre"]}</b><br>{list_m[0]["area"]:,.0f} m²<br>Humedad: 68%</div>', unsafe_allow_html=True)
-        if len(list_m) > 1:
-            with cols_s[1]: st.markdown(f'<div class="sensor-amarillo"><b>{list_m[1]["nombre"]}</b><br>{list_m[1]["area"]:,.0f} m²<br>Humedad: 45%</div>', unsafe_allow_html=True)
-        with cols_s[2]: st.markdown('<div class="sensor-rojo"><b>🚨 Riesgo</b><br>Humedad: 15%</div>', unsafe_allow_html=True)
+            num_cols = len(list_m) + 1 # +1 para la tarjeta de Riesgo
+            cols_s = st.columns(num_cols)
+            
+            for i, sector in enumerate(list_m):
+                # Intercalamos verde y amarillo solo por visualización
+                clase_css = "sensor-verde" if i % 2 == 0 else "sensor-amarillo"
+                humedad_sim = "68%" if i % 2 == 0 else "45%"
+                with cols_s[i]: 
+                    st.markdown(f'<div class="{clase_css}"><b>{sector["nombre"]}</b><br>{sector["area"]:,.0f} m²<br>Humedad: {humedad_sim}</div>', unsafe_allow_html=True)
+            
+            with cols_s[-1]: 
+                st.markdown('<div class="sensor-rojo"><b>🚨 Riesgo Global</b><br>Humedad: 15%</div>', unsafe_allow_html=True)
+        else:
+            # Fallback en caso de que no haya sectores mapeados
+            cols_s = st.columns(3)
+            with cols_s[0]: st.markdown('<div class="sensor-verde"><b>Sector A: No asignado</b><br>0 m²</div>', unsafe_allow_html=True)
+            with cols_s[1]: st.markdown('<div class="sensor-amarillo"><b>Sector B: No asignado</b><br>0 m²</div>', unsafe_allow_html=True)
+            with cols_s[2]: st.markdown('<div class="sensor-rojo"><b>🚨 Riesgo Global</b><br>Humedad: 15%</div>', unsafe_allow_html=True)
 
     with tab2:
         st.header("Centro de Mando")
         col_c, col_m = st.columns([1, 2])
         ruta_c, color_r = [], "cyan"
         with col_c:
-            tipo_m = st.radio("Misión:", ["Riego", "Nutrición", "Antiplagas"])
+            tipo_m = st.radio("Misión:", ["Riego de Emergencia", "Nutrición (Proteínas)", "Tratamiento (Anti-plagas)"])
             zona_o = st.selectbox("Objetivo:", list(zonas_v.keys()))
             if st.button("🚀 DESPLEGAR DRON", type="primary", use_container_width=True):
-                litros = round(st.session_state.agua_requerida_total / (1 if zona_o == "Toda la Parcela" else 3), 1) if tipo_m == "Riego" else 0
+                litros = round(st.session_state.agua_requerida_total / (1 if zona_o == "Toda la Parcela" else 3), 1) if tipo_m == "Riego de Emergencia" else 0
                 st.session_state.total_litros_hoy += litros
-                color_r = "cyan" if tipo_m == "Riego" else "orange"
+                color_r = "cyan" if tipo_m == "Riego de Emergencia" else "orange"
                 ruta_c = calcular_ruta_patron(zonas_v[zona_o], "Zig-Zag (Cobertura Total)", c[0], c[1])
                 st.success(f"Dron en vuelo hacia {zona_o}.")
                 st.session_state.registro_diario.append({"Hora": f"{date.today()}", "Misión": tipo_m, "Zona": zona_o, "Agua": f"{litros} L"})
         with col_m:
             map_d = folium.Map(location=c, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
-            # Mostrar sectores reales mapeados por el usuario
             for s in st.session_state.cultivos_mapeados.values():
                 folium.Polygon(locations=s['coords'], color=s['color'], fill=True, fill_opacity=0.4).add_to(map_d)
             if ruta_c: plugins.AntPath(locations=ruta_c, color=color_r, weight=5).add_to(map_d)
@@ -365,22 +372,49 @@ elif st.session_state.paso == 'dashboard':
     with tab3:
         st.header("Reporte Ejecutivo Twilio")
         st.dataframe(pd.DataFrame(st.session_state.registro_diario), use_container_width=True)
-        v_r = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Riego")
-        v_n = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Nutrición")
-        v_p = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Antiplagas")
         
-        msg_profesional = f"""*REPORTE ENJAMBRE VRA* 🚁🌱
------------------------------------
-*Gerente:* {st.session_state.usuario['nombre']}
-*Área Total:* {st.session_state.parcela_area:,} m²
-*Misiones Hoy:* {len(st.session_state.registro_diario)}
- • Riego: {v_r} | Nutrición: {v_n} | Plagas: {v_p}
-*Consumo Agua:* {st.session_state.total_litros_hoy:,.1f} L
------------------------------------
-_Estado: Operativo ✅_"""
+        v_r = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Riego de Emergencia")
+        v_n = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Nutrición (Proteínas)")
+        v_p = sum(1 for r in st.session_state.registro_diario if r["Misión"] == "Tratamiento (Anti-plagas)")
+        alerta_z = "Requiere Atención" if hum_r > 40 else "CRÍTICO - Alerta Hídrica"
         
-        st.text_area("Mensaje Twilio:", value=msg_profesional, height=200, disabled=True)
+        # 🚀 SOLUCIÓN: REPORTE WHATSAPP CON DETALLE ESPECÍFICO POR SECTORES
+        detalles_sectores = ""
+        for v in st.session_state.cultivos_mapeados.values():
+            detalles_sectores += f"  🌱 {v['nombre']}: {v['area']:,.0f} m² | 💧 Req: {v['agua']:,.1f} L\n"
+        
+        if not detalles_sectores:
+            detalles_sectores = "  • Sin sectores mapeados\n"
+            
+        msg_profesional = f"""*📋 REPORTE EJECUTIVO - ENJAMBRE VRA* 🚁🌱
+-----------------------------------
+*👤 Gerente Agrícola:* {st.session_state.usuario.get('nombre', '')}
+*📍 Área Total del Predio:* {st.session_state.parcela_area:,.0f} m²
+
+*🗺️ SECTORES PRODUCTIVOS (PLAS)*
+{detalles_sectores.strip()}
+
+*☁️ CONDICIONES AGROCLIMÁTICAS*
+🌡️ Temp: {temp_r}°C | 💧 Humedad: {hum_r}% | 💨 Viento: {vent_r} km/h
+
+*📊 ESTADO HÍDRICO DEL SUELO*
+🟢 Sectores Óptimos: Estable (>60%)
+🟡 Sectores Medios: Estrés Leve (40-60%)
+🔴 Zona Crítica: {alerta_z} (<30%)
+
+*🚀 OPERACIONES REALIZADAS HOY*
+🚁 Total Vuelos Desplegados: {len(st.session_state.registro_diario)}
+  • 💧 Riegos de Emergencia: {v_r}
+  • 💊 Nutrición (Proteínas): {v_n}
+  • 🛡️ Tratamiento (Antiplagas): {v_p}
+
+*📊 OPTIMIZACIÓN DE RECURSOS*
+💧 Consumo Hídrico Total Inyectado: {st.session_state.total_litros_hoy:,.1f} Litros
+
+_Generado automáticamente por Inteligencia Geoespacial PLAS._"""
+        
+        st.text_area("Mensaje Twilio:", value=msg_profesional, height=450, disabled=True)
         if st.button("🚀 ENVIAR REPORTE OFICIAL POR TWILIO", type="primary", use_container_width=True):
-            exito, sid = enviar_whatsapp_twilio(msg_profesional, st.session_state.usuario['telefono'])
-            if exito: st.success(f"Reporte enviado. SID: {sid}")
-            else: st.error(f"Error: {sid}")
+            exito, sid = enviar_whatsapp_twilio(msg_profesional, st.session_state.usuario.get('telefono', ''))
+            if exito: st.success(f"Reporte enviado con éxito al celular registrado. SID: {sid}")
+            else: st.error(f"Error de envío. Revisa credenciales: {sid}")
