@@ -30,7 +30,7 @@ if 'cultivos_asignados' not in st.session_state: st.session_state.cultivos_asign
 if 'registro_diario' not in st.session_state: st.session_state.registro_diario = []
 if 'poligono_coords' not in st.session_state: st.session_state.poligono_coords = None
 if 'centro_mapa' not in st.session_state: st.session_state.centro_mapa = [-33.456, -70.650]
-if 'mapa_buscador_inicial' not in st.session_state: st.session_state.mapa_buscador_inicial = [-33.456, -70.650] # Memoria del buscador
+if 'mapa_buscador_inicial' not in st.session_state: st.session_state.mapa_buscador_inicial = [-33.456, -70.650]
 if 'clima_real' not in st.session_state: st.session_state.clima_real = {"temp": 0, "hum": 0, "viento": 0}
 if 'total_litros_hoy' not in st.session_state: st.session_state.total_litros_hoy = 0
 
@@ -38,7 +38,6 @@ DB_CULTIVOS = ["Cerezas", "Uva Vinífera", "Paltos", "Nogales", "Maíz", "Trigo"
 
 # --- FUNCIONES INTELIGENTES ---
 def buscar_ubicacion(direccion):
-    """Busca las coordenadas de una ciudad o dirección en el mundo."""
     try:
         url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(direccion)}&format=json&limit=1"
         headers = {'User-Agent': 'EnjambreVRADemo/1.0'}
@@ -60,6 +59,7 @@ def obtener_clima_real(lat, lon):
     except:
         return {"temp": 13.8, "hum": 73, "viento": 1.7}
 
+# 🚀 MOTOR DE VUELO DE PRECISIÓN (RAY-CASTING)
 def calcular_ruta_patron(coords_poligono, patron, lat_centro, lon_centro):
     if not coords_poligono: return []
     ruta = [[lat_centro, lon_centro]] 
@@ -68,20 +68,44 @@ def calcular_ruta_patron(coords_poligono, patron, lat_centro, lon_centro):
     if patron == "Perimetral (Bordes)":
         ruta.extend(coords_formateadas)
         ruta.append(coords_formateadas[0]) 
+        
     elif patron == "Zig-Zag (Cobertura Total)":
         lats = [p[0] for p in coords_formateadas]
-        lons = [p[1] for p in coords_formateadas]
-        paso_lat = (max(lats) - min(lats)) / 4
-        for i in range(5):
-            lat_actual = max(lats) - (i * paso_lat)
-            if i % 2 == 0:
-                ruta.extend([[lat_actual, min(lons)], [lat_actual, max(lons)]])
-            else:
-                ruta.extend([[lat_actual, max(lons)], [lat_actual, min(lons)]])
+        max_lat, min_lat = max(lats), min(lats)
+        paso_lat = (max_lat - min_lat) / 6 # Hacemos la malla un poco más fina
+        
+        # Cerramos el polígono para que las matemáticas no fallen en el último borde
+        poly = coords_formateadas + [coords_formateadas[0]]
+        
+        for i in range(1, 6):
+            lat_actual = max_lat - (i * paso_lat)
+            intersecciones = []
+            
+            # Verificamos dónde la línea del dron choca con los bordes de la parcela
+            for j in range(len(poly)-1):
+                p1 = poly[j]
+                p2 = poly[j+1]
+                if (p1[0] <= lat_actual < p2[0]) or (p2[0] <= lat_actual < p1[0]):
+                    if p2[0] != p1[0]: # Evitar división por cero
+                        lon_int = p1[1] + (lat_actual - p1[0]) * (p2[1] - p1[1]) / (p2[0] - p1[0])
+                        intersecciones.append(lon_int)
+            
+            intersecciones.sort()
+            
+            # Si hay intersecciones, dibujamos la línea estrictamente DENTRO de los bordes
+            if len(intersecciones) >= 2:
+                lon_start = intersecciones[0]
+                lon_end = intersecciones[-1]
+                if i % 2 == 0:
+                    ruta.extend([[lat_actual, lon_start], [lat_actual, lon_end]])
+                else:
+                    ruta.extend([[lat_actual, lon_end], [lat_actual, lon_start]])
+                    
     elif patron == "Espiral (Foco Central)":
         for i in range(1, 6):
-            r = (0.001 / 5) * i
+            r = (0.0008 / 5) * i
             ruta.extend([[lat_centro + r, lon_centro], [lat_centro, lon_centro + r], [lat_centro - r, lon_centro], [lat_centro, lon_centro - r]])
+            
     ruta.append([lat_centro, lon_centro]) 
     return ruta
 
@@ -111,7 +135,6 @@ if st.session_state.paso == 'login':
 elif st.session_state.paso == 'onboarding_mapa':
     st.header(f"Bienvenido {st.session_state.usuario['nombre']} - Delimitación Satelital")
     
-    # NUEVO: BUSCADOR DE UBICACIÓN
     st.write("🔍 **Paso 1:** Busque la región, comuna o sector de su terreno para acercar el satélite.")
     col_search, col_btn = st.columns([3, 1])
     with col_search:
@@ -217,7 +240,6 @@ elif st.session_state.paso == 'dashboard':
         with zonas[2]:
             st.markdown(f'<div class="sensor-rojo"><b>🚨 Zona de Riesgo</b><br>Humedad Suelo: {"22%" if hum_real > 40 else "15% (CRÍTICO)"}<br>Alerta hídrica<br>Requiere Atención</div>', unsafe_allow_html=True)
 
-    # ---------------- PESTAÑA 2: DRON ----------------
     with tab2:
         st.header("Centro de Mando Logístico VRA")
         col_ctrl, col_map = st.columns([1, 2])
