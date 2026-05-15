@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import folium
 from folium import plugins
 from streamlit_folium import st_folium
@@ -59,54 +59,49 @@ def obtener_clima_real(lat, lon):
     except:
         return {"temp": 13.8, "hum": 73, "viento": 1.7}
 
-# 🚀 MOTOR DE VUELO DE PRECISIÓN (RAY-CASTING)
-def calcular_ruta_patron(coords_poligono, patron, lat_centro, lon_centro):
-    if not coords_poligono: return []
-    ruta = [[lat_centro, lon_centro]] 
-    coords_formateadas = [[p[1], p[0]] for p in coords_poligono]
+# 🚀 MOTOR DE VUELO QUIRÚRGICO (RAY-CASTING)
+def calcular_ruta_patron(coords_zona, patron, lat_base, lon_base):
+    if not coords_zona: return []
+    
+    # Calculamos el centro exacto de la zona seleccionada
+    c_lat = sum(p[0] for p in coords_zona) / len(coords_zona)
+    c_lon = sum(p[1] for p in coords_zona) / len(coords_zona)
+    
+    ruta = [[lat_base, lon_base], [c_lat, c_lon]] # Despega de la base y va al centro de la zona
     
     if patron == "Perimetral (Bordes)":
-        ruta.extend(coords_formateadas)
-        ruta.append(coords_formateadas[0]) 
+        ruta.extend(coords_zona)
+        ruta.append(coords_zona[0]) 
         
     elif patron == "Zig-Zag (Cobertura Total)":
-        lats = [p[0] for p in coords_formateadas]
+        lats = [p[0] for p in coords_zona]
         max_lat, min_lat = max(lats), min(lats)
-        paso_lat = (max_lat - min_lat) / 6 # Hacemos la malla un poco más fina
+        paso_lat = (max_lat - min_lat) / 6 
         
-        # Cerramos el polígono para que las matemáticas no fallen en el último borde
-        poly = coords_formateadas + [coords_formateadas[0]]
-        
+        poly = coords_zona + [coords_zona[0]]
         for i in range(1, 6):
             lat_actual = max_lat - (i * paso_lat)
             intersecciones = []
-            
-            # Verificamos dónde la línea del dron choca con los bordes de la parcela
             for j in range(len(poly)-1):
-                p1 = poly[j]
-                p2 = poly[j+1]
+                p1, p2 = poly[j], poly[j+1]
                 if (p1[0] <= lat_actual < p2[0]) or (p2[0] <= lat_actual < p1[0]):
-                    if p2[0] != p1[0]: # Evitar división por cero
+                    if p2[0] != p1[0]: 
                         lon_int = p1[1] + (lat_actual - p1[0]) * (p2[1] - p1[1]) / (p2[0] - p1[0])
                         intersecciones.append(lon_int)
             
             intersecciones.sort()
-            
-            # Si hay intersecciones, dibujamos la línea estrictamente DENTRO de los bordes
+            # Esto asegura que el dron NO se salga de la zona
             if len(intersecciones) >= 2:
-                lon_start = intersecciones[0]
-                lon_end = intersecciones[-1]
-                if i % 2 == 0:
-                    ruta.extend([[lat_actual, lon_start], [lat_actual, lon_end]])
-                else:
-                    ruta.extend([[lat_actual, lon_end], [lat_actual, lon_start]])
+                lon_start, lon_end = intersecciones[0], intersecciones[-1]
+                if i % 2 == 0: ruta.extend([[lat_actual, lon_start], [lat_actual, lon_end]])
+                else: ruta.extend([[lat_actual, lon_end], [lat_actual, lon_start]])
                     
     elif patron == "Espiral (Foco Central)":
         for i in range(1, 6):
             r = (0.0008 / 5) * i
-            ruta.extend([[lat_centro + r, lon_centro], [lat_centro, lon_centro + r], [lat_centro - r, lon_centro], [lat_centro, lon_centro - r]])
+            ruta.extend([[c_lat + r, c_lon], [c_lat, c_lon + r], [c_lat - r, c_lon], [c_lat, c_lon - r]])
             
-    ruta.append([lat_centro, lon_centro]) 
+    ruta.append([lat_base, lon_base]) # Vuelve a la base
     return ruta
 
 # ==========================================
@@ -135,10 +130,10 @@ if st.session_state.paso == 'login':
 elif st.session_state.paso == 'onboarding_mapa':
     st.header(f"Bienvenido {st.session_state.usuario['nombre']} - Delimitación Satelital")
     
-    st.write("🔍 **Paso 1:** Busque la región, comuna o sector de su terreno para acercar el satélite.")
+    st.write("🔍 **Paso 1:** Busque la región o sector de su terreno para acercar el satélite.")
     col_search, col_btn = st.columns([3, 1])
     with col_search:
-        direccion_busqueda = st.text_input("Ingrese ubicación (Ej: Quillota, Chile):", label_visibility="collapsed")
+        direccion_busqueda = st.text_input("Ingrese ubicación:", label_visibility="collapsed")
     with col_btn:
         if st.button("Buscar en Mapa", type="primary", use_container_width=True):
             if direccion_busqueda:
@@ -148,7 +143,7 @@ elif st.session_state.paso == 'onboarding_mapa':
                         st.session_state.mapa_buscador_inicial = nuevas_coords
                         st.rerun()
                     else:
-                        st.error("Ubicación no encontrada. Intente con otra referencia.")
+                        st.error("Ubicación no encontrada.")
 
     st.write("📍 **Paso 2:** Utilice la herramienta de polígono ⬠ para dibujar las fronteras de su parcela.")
     
@@ -207,11 +202,28 @@ elif st.session_state.paso == 'onboarding_cultivos':
                 st.rerun()
 
 # ==========================================
-# FASE 4: DASHBOARD PRINCIPAL
+# FASE 4: DASHBOARD PRINCIPAL Y CÁLCULO DE ZONAS
 # ==========================================
 elif st.session_state.paso == 'dashboard':
     st.title(f"📊 Dashboard Enjambre VRA | Admin: {st.session_state.usuario['nombre']}")
     
+    # --- PROCESAMIENTO ESPACIAL DE ZONAS ---
+    zonas_dict = {}
+    if st.session_state.poligono_coords:
+        coords_formateadas = [[p[1], p[0]] for p in st.session_state.poligono_coords]
+        pts = coords_formateadas[:-1] if coords_formateadas[0] == coords_formateadas[-1] else coords_formateadas
+        n = len(pts)
+        zonas_dict["Toda la Parcela"] = coords_formateadas
+        
+        if n >= 3:
+            c_lat, c_lon = st.session_state.centro_mapa
+            centroide = [c_lat, c_lon]
+            t1, t2 = n // 3, 2 * (n // 3)
+            
+            zonas_dict["Zona Óptima (Verde)"] = [centroide] + pts[0:t1+1] + [centroide]
+            zonas_dict["Zona Media (Amarilla)"] = [centroide] + pts[t1:t2+1] + [centroide]
+            zonas_dict["Zona Crítica (Roja)"] = [centroide] + pts[t2:] + [pts[0], centroide]
+
     with st.sidebar:
         st.header("🕒 Cronograma Operativo (Autónomo)")
         st.markdown('<div class="horario-auto">💧 <b>05:30 AM</b> - Riego General</div>', unsafe_allow_html=True)
@@ -232,14 +244,15 @@ elif st.session_state.paso == 'dashboard':
         
         st.markdown("---")
         nombres_cultivos = list(st.session_state.cultivos_asignados.keys())
-        zonas = st.columns(3)
+        zonas_cols = st.columns(3)
         if len(nombres_cultivos) > 0:
-            with zonas[0]: st.markdown(f'<div class="sensor-verde"><b>Sector A: {nombres_cultivos[0]}</b><br>Área: {st.session_state.cultivos_asignados[nombres_cultivos[0]]} m²<br>Humedad Suelo: 68%<br>Estado: Óptimo</div>', unsafe_allow_html=True)
+            with zonas_cols[0]: st.markdown(f'<div class="sensor-verde"><b>Sector A: {nombres_cultivos[0]}</b><br>Área: {st.session_state.cultivos_asignados[nombres_cultivos[0]]} m²<br>Humedad Suelo: 68%<br>Estado: Óptimo</div>', unsafe_allow_html=True)
         if len(nombres_cultivos) > 1:
-            with zonas[1]: st.markdown(f'<div class="sensor-amarillo"><b>Sector B: {nombres_cultivos[1]}</b><br>Área: {st.session_state.cultivos_asignados[nombres_cultivos[1]]} m²<br>Humedad Suelo: 45%<br>Estado: Estrés leve</div>', unsafe_allow_html=True)
-        with zonas[2]:
+            with zonas_cols[1]: st.markdown(f'<div class="sensor-amarillo"><b>Sector B: {nombres_cultivos[1]}</b><br>Área: {st.session_state.cultivos_asignados[nombres_cultivos[1]]} m²<br>Humedad Suelo: 45%<br>Estado: Estrés leve</div>', unsafe_allow_html=True)
+        with zonas_cols[2]:
             st.markdown(f'<div class="sensor-rojo"><b>🚨 Zona de Riesgo</b><br>Humedad Suelo: {"22%" if hum_real > 40 else "15% (CRÍTICO)"}<br>Alerta hídrica<br>Requiere Atención</div>', unsafe_allow_html=True)
 
+    # ---------------- PESTAÑA 2: DRON QUIRÚRGICO ----------------
     with tab2:
         st.header("Centro de Mando Logístico VRA")
         col_ctrl, col_map = st.columns([1, 2])
@@ -250,6 +263,11 @@ elif st.session_state.paso == 'dashboard':
             st.subheader("Control Manual Excepcional")
             hora_actual = st.slider("Reloj:", 0, 23, 14, format="%d:00 hrs")
             tipo_mision = st.radio("Acción a ejecutar:", ["Riego de Emergencia", "Nutrición (Proteínas)", "Tratamiento (Anti-plagas)"])
+            
+            # NUEVO: SELECTOR DE ZONA OBJETIVO
+            opciones_zonas = list(zonas_dict.keys()) if zonas_dict else ["Toda la Parcela"]
+            zona_objetivo = st.selectbox("Sector Objetivo de Vuelo (Focalizado):", opciones_zonas)
+            
             patron_vuelo = st.selectbox("Patrón de Despliegue Táctico:", ["Zig-Zag (Cobertura Total)", "Espiral (Foco Central)", "Perimetral (Bordes)"])
             
             es_riesgoso = (tipo_mision == "Riego de Emergencia" and 10 <= hora_actual <= 18)
@@ -258,24 +276,36 @@ elif st.session_state.paso == 'dashboard':
                 st.error("⚠️ ADVERTENCIA: Riego diurno detectado (Efecto lupa).")
                 if not st.checkbox("Declaro entender los riesgos y autorizo."): boton_deshabilitado = True 
             
-            if st.button("🚀 Forzar Despliegue", type="primary", disabled=boton_deshabilitado, use_container_width=True):
-                litros_usados = st.session_state.parcela_area * 0.5 if tipo_mision == "Riego de Emergencia" else 0
-                st.session_state.total_litros_hoy += litros_usados
-                color_ruta = "cyan" if tipo_mision == "Riego de Emergencia" else ("orange" if tipo_mision == "Nutrición (Proteínas)" else "red")
-                ruta_calculada = calcular_ruta_patron(st.session_state.poligono_coords, patron_vuelo, st.session_state.centro_mapa[0], st.session_state.centro_mapa[1])
+            if st.button("🚀 Forzar Despliegue Focalizado", type="primary", disabled=boton_deshabilitado, use_container_width=True):
                 
-                with st.spinner(f"Transmitiendo patrón {patron_vuelo} al dron..."):
+                # OPTIMIZACIÓN DE RECURSOS: Si elige una zona, gasta menos agua.
+                area_vuelo = st.session_state.parcela_area
+                if zona_objetivo != "Toda la Parcela":
+                    area_vuelo = st.session_state.parcela_area / 3
+                
+                litros_usados = round(area_vuelo * 0.5, 1) if tipo_mision == "Riego de Emergencia" else 0
+                st.session_state.total_litros_hoy += litros_usados
+                
+                color_ruta = "cyan" if tipo_mision == "Riego de Emergencia" else ("orange" if tipo_mision == "Nutrición (Proteínas)" else "red")
+                
+                # ENVIAMOS SOLO LA ZONA ELEGIDA AL ALGORITMO
+                coords_objetivo = zonas_dict.get(zona_objetivo, [])
+                ruta_calculada = calcular_ruta_patron(coords_objetivo, patron_vuelo, st.session_state.centro_mapa[0], st.session_state.centro_mapa[1])
+                
+                with st.spinner(f"Calculando trayectoria para {zona_objetivo}..."):
                     time.sleep(2)
-                    st.success(f"✅ Dron en vuelo. Patrón: {patron_vuelo}")
-                    if litros_usados > 0: st.info(f"💧 Agua calculada: {litros_usados} L.")
+                    st.success(f"✅ Dron en vuelo. Objetivo: {zona_objetivo}")
+                    if litros_usados > 0: 
+                        st.info(f"💧 Agua calculada para este sector: {litros_usados} L. (Ahorro del 66% respecto a parcela completa)")
                     st.toast(f"📧 Correo SMTP enviado a {st.session_state.usuario['email']}", icon="✅")
+                    
                     st.session_state.registro_diario.append({
-                        "Hora": f"{hora_actual}:00", "Misión": tipo_mision, "Patrón": patron_vuelo,
+                        "Hora": f"{hora_actual}:00", "Misión": tipo_mision, "Objetivo": zona_objetivo,
                         "Agua Usada": f"{litros_usados} L", "Estado": "Completado"
                     })
         
         with col_map:
-            st.markdown("**Monitor de Vuelo: Estrés Hídrico Intra-Parcela Zonal**")
+            st.markdown("**Monitor de Vuelo: Tratamiento Focalizado (Spot Spraying)**")
             
             mapa_dron = folium.Map(
                 location=st.session_state.centro_mapa, 
@@ -285,27 +315,12 @@ elif st.session_state.paso == 'dashboard':
                 zoom_control=False, scrollWheelZoom=False, dragging=False, touchZoom=False, doubleClickZoom=False, keyboard=False
             )
             
-            if st.session_state.poligono_coords:
-                coords_formateadas = [[p[1], p[0]] for p in st.session_state.poligono_coords]
-                pts = coords_formateadas[:-1] if coords_formateadas[0] == coords_formateadas[-1] else coords_formateadas
-                n = len(pts)
-                
-                if n >= 3:
-                    c_lat, c_lon = st.session_state.centro_mapa
-                    centroide = [c_lat, c_lon]
-                    
-                    t1 = n // 3
-                    t2 = 2 * (n // 3)
-                    
-                    zona_verde = [centroide] + pts[0:t1+1] + [centroide]
-                    zona_amarilla = [centroide] + pts[t1:t2+1] + [centroide]
-                    zona_roja = [centroide] + pts[t2:] + [pts[0], centroide]
-                    
-                    folium.Polygon(locations=zona_verde, color="green", fill=True, fill_color="green", fill_opacity=0.45, tooltip="Zona Óptima: 68% Humedad").add_to(mapa_dron)
-                    folium.Polygon(locations=zona_amarilla, color="yellow", fill=True, fill_color="yellow", fill_opacity=0.45, tooltip="Zona Media: 45% Humedad").add_to(mapa_dron)
-                    folium.Polygon(locations=zona_roja, color="red", fill=True, fill_color="red", fill_opacity=0.45, tooltip="Zona Crítica: 22% Humedad").add_to(mapa_dron)
-                else:
-                    folium.Polygon(locations=coords_formateadas, color="red", fill=True, fill_opacity=0.4).add_to(mapa_dron)
+            if "Zona Óptima (Verde)" in zonas_dict:
+                folium.Polygon(locations=zonas_dict["Zona Óptima (Verde)"], color="green", fill=True, fill_color="green", fill_opacity=0.45).add_to(mapa_dron)
+                folium.Polygon(locations=zonas_dict["Zona Media (Amarilla)"], color="yellow", fill=True, fill_color="yellow", fill_opacity=0.45).add_to(mapa_dron)
+                folium.Polygon(locations=zonas_dict["Zona Crítica (Roja)"], color="red", fill=True, fill_color="red", fill_opacity=0.45).add_to(mapa_dron)
+            elif "Toda la Parcela" in zonas_dict:
+                folium.Polygon(locations=zonas_dict["Toda la Parcela"], color="gray", fill=True, fill_opacity=0.4).add_to(mapa_dron)
             
             if ruta_calculada:
                 plugins.AntPath(locations=ruta_calculada, dash_array=[10, 20], delay=800, color=color_ruta, weight=5, pulse_color='white').add_to(mapa_dron)
