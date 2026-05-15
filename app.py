@@ -135,6 +135,10 @@ if 'mapa_buscador_inicial' not in st.session_state: st.session_state.mapa_buscad
 if 'clima_real' not in st.session_state: st.session_state.clima_real = {"temp": 0, "hum": 0, "viento": 0}
 if 'total_litros_hoy' not in st.session_state: st.session_state.total_litros_hoy = 0
 
+# 🔥 MEMORIA PERMANENTE DEL DRON (EVITA QUE SE APAGUE)
+if 'ruta_dron_actual' not in st.session_state: st.session_state.ruta_dron_actual = []
+if 'color_dron_actual' not in st.session_state: st.session_state.color_dron_actual = "cyan"
+
 # --- 🚀 FUNCIONES MATEMÁTICAS ---
 def calcular_area_poligono(coords):
     if not coords or len(coords) < 3: return 0
@@ -177,7 +181,10 @@ def calcular_ruta_patron(coords_zona, patron, lat_base, lon_base):
     if not coords_zona: return []
     c_lat, c_lon = sum(p[0] for p in coords_zona)/len(coords_zona), sum(p[1] for p in coords_zona)/len(coords_zona)
     ruta = [[lat_base, lon_base], [c_lat, c_lon]]
-    if patron == "Zig-Zag (Cobertura Total)":
+    if patron == "Perimetral (Bordes)":
+        ruta.extend(coords_zona)
+        ruta.append(coords_zona[0])
+    elif patron == "Zig-Zag (Cobertura Total)":
         lats = [p[0] for p in coords_zona]; max_lat, min_lat = max(lats), min(lats); paso_lat = (max_lat - min_lat) / 6 
         poly = coords_zona + [coords_zona[0]]
         for i in range(1, 6):
@@ -292,7 +299,7 @@ elif st.session_state.paso == 'onboarding_cultivos':
 
     with col_map:
         st.markdown("**Interactúe con el mapa para delimitar los sectores:**")
-        m_plas = folium.Map(location=st.session_state.centro_mapa, zoom_start=17, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+        m_plas = folium.Map(location=st.session_state.centro_mapa, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
         
         if st.session_state.poligono_coords:
             folium.Polygon(locations=[[p[1], p[0]] for p in st.session_state.poligono_coords], color="white", weight=2, dash_array='5, 5', fill=False).add_to(m_plas)
@@ -316,10 +323,12 @@ elif st.session_state.paso == 'dashboard':
     n_pts = len(pts_t); c = st.session_state.centro_mapa; t1, t2 = n_pts//3, 2*(n_pts//3)
     zonas_v = {"Toda la Parcela": pts_t, "Zona Óptima": [c]+pts_t[0:t1+1]+[c], "Zona Media": [c]+pts_t[t1:t2+1]+[c], "Zona Crítica": [c]+pts_t[t2:]+[pts_t[0], c]}
 
+    # 🚀 SOLUCIÓN 1: RESTAURACIÓN COMPLETA DEL MENÚ LATERAL
     with st.sidebar:
-        st.header("🕒 Cronograma")
-        st.markdown('<div class="horario-auto">💧 05:30 AM - Riego</div>', unsafe_allow_html=True)
-        st.markdown('<div class="horario-auto">🛡️ 06:00 PM - Control</div>', unsafe_allow_html=True)
+        st.header("🕒 Cronograma Operativo")
+        st.markdown('<div class="horario-auto">💧 <b>05:30 AM</b> - Riego General</div>', unsafe_allow_html=True)
+        st.markdown('<div class="horario-auto">🧪 <b>08:00 AM</b> - Aplicación Vitaminas</div>', unsafe_allow_html=True)
+        st.markdown('<div class="horario-auto">🛡️ <b>06:00 PM</b> - Control Antiplagas</div>', unsafe_allow_html=True)
 
     tab1, tab2, tab3 = st.tabs(["🌱 Sensores", "🚁 Logística Dron", "📈 Reporte Maestro"])
     
@@ -347,34 +356,50 @@ elif st.session_state.paso == 'dashboard':
     with tab2:
         st.header("Centro de Mando")
         col_c, col_m = st.columns([1, 2])
-        ruta_c, color_r = [], "cyan"
+        
         with col_c:
+            hora_actual = st.slider("Reloj (Simulador):", 0, 23, 14, format="%d:00 hrs")
             tipo_m = st.radio("Misión:", ["Riego de Emergencia", "Nutrición (Proteínas)", "Tratamiento (Anti-plagas)"])
             zona_o = st.selectbox("Objetivo:", list(zonas_v.keys()))
-            if st.button("🚀 DESPLEGAR DRON", type="primary", use_container_width=True):
+            
+            # 🚀 SOLUCIÓN 2: SOLO ZIG-ZAG O PERIMETRAL
+            patron_vuelo = st.selectbox("Patrón de Despliegue Táctico:", ["Zig-Zag (Cobertura Total)", "Perimetral (Bordes)"])
+            
+            es_riesgoso = (tipo_m == "Riego de Emergencia" and 10 <= hora_actual <= 18)
+            boton_deshabilitado = es_riesgoso and not st.checkbox("Declaro entender los riesgos térmicos.")
+            
+            if st.button("🚀 DESPLEGAR DRON", type="primary", disabled=boton_deshabilitado, use_container_width=True):
                 litros = round(st.session_state.agua_requerida_total / (1 if zona_o == "Toda la Parcela" else 3), 1) if tipo_m == "Riego de Emergencia" else 0
                 st.session_state.total_litros_hoy += litros
-                color_r = "cyan" if tipo_m == "Riego de Emergencia" else "orange"
-                ruta_c = calcular_ruta_patron(zonas_v[zona_o], "Zig-Zag (Cobertura Total)", c[0], c[1])
-                st.success(f"Dron en vuelo hacia {zona_o}.")
-                st.session_state.registro_diario.append({"Hora": f"{date.today()}", "Misión": tipo_m, "Zona": zona_o, "Agua": f"{litros} L"})
+                
+                # 🚀 SOLUCIÓN 3: GUARDAR RUTA EN MEMORIA PARA QUE NO DESAPAREZCA
+                st.session_state.color_dron_actual = "cyan" if tipo_m == "Riego de Emergencia" else ("orange" if tipo_m == "Nutrición (Proteínas)" else "red")
+                st.session_state.ruta_dron_actual = calcular_ruta_patron(zonas_v[zona_o], patron_vuelo, c[0], c[1])
+                
+                # SUSPENSIÓN DE 10 SEGUNDOS (Simulador de vuelo sin números)
+                with st.spinner(f"🚁 Dron en operación sobre {zona_o}. Ejecutando patrón {patron_vuelo}..."):
+                    time.sleep(10)
+                    
+                st.success(f"✅ Misión de {tipo_m} finalizada con éxito en {zona_o}.")
+                if litros > 0: st.info(f"💧 Agua inyectada (Base PLAS): {litros:,.1f} L.")
+                st.session_state.registro_diario.append({"Hora": f"{hora_actual}:00", "Misión": tipo_m, "Zona": zona_o, "Agua": f"{litros} L"})
+        
         with col_m:
             map_d = folium.Map(location=c, zoom_start=16, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
             
-            # 1. CAPA INFERIOR: Cultivos mapeados manuales (Alta transparencia para no saturar)
             for s in st.session_state.cultivos_mapeados.values():
                 folium.Polygon(locations=s['coords'], color=s['color'], weight=1, fill=True, fill_opacity=0.2, tooltip=f"Cultivo: {s['nombre']}").add_to(map_d)
             
-            # 2. CAPA SUPERIOR: Zonas Matemáticas de Estrés Hídrico (Colores fuertes y predominantes)
             if "Zona Óptima" in zonas_v and len(zonas_v["Zona Óptima"]) > 2:
                 folium.Polygon(locations=zonas_v["Zona Óptima"], color="#28a745", weight=2, fill=True, fill_color="#28a745", fill_opacity=0.45, tooltip="Zona Óptima (>60% Humedad)").add_to(map_d)
                 folium.Polygon(locations=zonas_v["Zona Media"], color="#ffc107", weight=2, fill=True, fill_color="#ffc107", fill_opacity=0.45, tooltip="Zona Media (40-60% Humedad)").add_to(map_d)
                 folium.Polygon(locations=zonas_v["Zona Crítica"], color="#dc3545", weight=2, fill=True, fill_color="#dc3545", fill_opacity=0.55, tooltip="Zona Crítica (<30% Humedad)").add_to(map_d)
 
-            # 3. RUTA DEL DRON
-            if ruta_c: plugins.AntPath(locations=ruta_c, color=color_r, weight=5).add_to(map_d)
+            # RUTA CARGADA DESDE LA MEMORIA (Así no se apaga)
+            if st.session_state.ruta_dron_actual: 
+                plugins.AntPath(locations=st.session_state.ruta_dron_actual, color=st.session_state.color_dron_actual, weight=5, dash_array=[10, 20], delay=800, pulse_color='white').add_to(map_d)
             
-            st_folium(map_d, height=400, use_container_width=True)
+            st_folium(map_d, height=450, use_container_width=True)
 
     with tab3:
         st.header("Reporte Ejecutivo Twilio")
